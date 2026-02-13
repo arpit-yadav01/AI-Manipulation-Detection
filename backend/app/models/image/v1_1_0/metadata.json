@@ -1,0 +1,10 @@
+{
+  "model_name": "image_auth_classifier",
+  "version": "1.1.0",
+  "architecture": "EfficientNet-B0",
+  "trained_on_images": 180000,
+  "calibrated": true,
+  "calibration_method": "temperature_scaling",
+  "created_at": "2026-01-05",
+  "notes": "Recalibrated on 180k images. Stable for image + video pipelines."
+}

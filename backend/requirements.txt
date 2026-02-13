@@ -1,0 +1,30 @@
+# ------------------------
+# Core backend
+# ------------------------
+fastapi
+uvicorn[standard]
+python-multipart
+pydantic
+rq
+redis
+pymongo
+boto3
+pillow
+
+# -----------------------
+# ML / CV (PINNED)
+# ------------------------
+numpy>=1.24,<2.0
+torch==2.1.2
+torchvision==0.16.2
+
+opencv-python-headless<4.12
+mediapipe==0.10.9
+scikit-learn==1.4.2
+
+
+facenet-pytorch==2.5.3
+# Audio sync
+librosa==0.10.2.post1
+soundfile==0.12.1
+git+https://github.com/openai/CLIP.git

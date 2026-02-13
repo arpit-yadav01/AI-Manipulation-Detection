@@ -1,0 +1,29 @@
+function Show-Tree {
+    param (
+        [string]$Path = ".",
+        [string]$Indent = ""
+    )
+
+    $items = Get-ChildItem $Path | Where-Object {
+        $_.Name -notmatch "node_modules|datasets|\.git|dist|build|coverage|\.next|out|target|\.idea" -and
+        $_.Extension -notmatch "\.(png|jpg|jpeg|gif|svg|webp|mp4|avi|mkv|mov|webm|zip|exe|pdf|log|class)$"
+    }
+
+    $count = $items.Count
+    $i = 0
+
+    foreach ($item in $items) {
+        $i++
+        $isLast = ($i -eq $count)
+        $prefix = if ($isLast) { "└── " } else { "├── " }
+
+        Write-Output "$Indent$prefix$($item.Name)"
+
+        if ($item.PSIsContainer) {
+            $newIndent = if ($isLast) { "$Indent    " } else { "$Indent│   " }
+            Show-Tree -Path $item.FullName -Indent $newIndent
+        }
+    }
+}
+
+Show-Tree

@@ -1,0 +1,87 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.pyc
+pip-log.txt
+pip-delete-this-directory.txt
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Virtual environments
+venv/
+env/
+ENV/
+
+# Model files (large binary files - use Git LFS if needed)
+*.pt
+*.pth
+*.h5
+*.pkl
+*.ckpt
+*.safetensors
+*.onnx
+
+# Datasets - NEVER commit these
+datasets/
+uploads/
+video_frames/
+heatmaps/
+sample/
+
+# Specific model files
+image_auth_model.pt
+calibration.pt
+models/calibration.pt
+models/image_auth_model.pt
+models_training/calibration.pt
+models_training/image_auth_model.pt
+
+# Node.js
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+package-lock.json
+dist/
+build/
+.vite/
+
+# Environment variables
+.env
+.env.local
+.env.*.local
+*.env
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Workflow directories
+.zencoder/
+.zenflow/
+
+# Docker
+*.log
+docker-compose.override.yml
+
+# Database
+*.db
+*.sqlite
+*.sqlite3
+
+# Temporary files
+*.tmp
+tmp/
+temp/
