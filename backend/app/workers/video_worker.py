@@ -558,6 +558,8 @@ def process_video(job_id: str, video_path: str):
 
             evidence_summary=evidence_summary,
             av_sync_signal=av_sync_signal,
+       
+
         )
 
         explanations = build_video_explanations(
@@ -585,6 +587,7 @@ def process_video(job_id: str, video_path: str):
                         "explanations": explanations,
                         "timeline": timeline,
                         "lipsync_dominance": lipsync_dominance,
+                        
                     },
                 }
             },
