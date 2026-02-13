@@ -242,7 +242,6 @@
 
 
 
-
 from app.video.explainability.calibration import calibrate_video_confidence
 
 
@@ -311,11 +310,10 @@ def apply_contradiction_dampening(
     evidence_summary: dict | None,
 ) -> float:
     """
-    Dampens confidence when diffusion/evidence contradicts
-    strong natural signals.
+    Dampens confidence when strong natural signals
+    contradict suspicious diffusion evidence.
 
     Max dampening: -0.12
-    Fail-open design.
     """
 
     if not isinstance(evidence_summary, dict):
@@ -349,7 +347,7 @@ def apply_contradiction_dampening(
 
 
 # ============================================================
-# VIDEO FINAL FUSION — V4 (Normalized Temporal + Motion)
+# VIDEO FINAL FUSION — V5 (Section 2 Complete)
 # ============================================================
 
 def fuse_video_signals(
@@ -375,13 +373,11 @@ def fuse_video_signals(
     evidence_summary: dict | None = None,
     av_sync_signal: dict | None = None,
 
-    # 🔥 NEW NORMALIZED ANOMALIES
+    # Normalized anomaly scores (0–1)
     temporal_anomaly: float = 0.0,
     motion_anomaly: float = 0.0,
-
     identity_anomaly: float = 0.0,
     geometry_anomaly: float = 0.0,
-
 ) -> dict:
     """
     Final conservative fusion of all video-level forensic signals.
@@ -398,18 +394,19 @@ def fuse_video_signals(
         confidence += (ela_suspicious_frames / frames_analyzed) * 0.3
 
     # --------------------------------------------------------
-    # NORMALIZED TEMPORAL + MOTION (PRIMARY UPGRADE)
+    # Normalized Temporal
     # --------------------------------------------------------
-
     if temporal_anomaly > 0:
         delta = 0.10 * temporal_anomaly
         confidence += delta
         penalties.append(delta)
     elif temporal_signal and temporal_signal.get("verdict") == "unstable":
-        # fallback safety
         confidence += 0.08
         penalties.append(0.08)
 
+    # --------------------------------------------------------
+    # Normalized Motion
+    # --------------------------------------------------------
     if motion_anomaly > 0:
         delta = 0.08 * motion_anomaly
         confidence += delta
@@ -418,28 +415,31 @@ def fuse_video_signals(
         confidence += 0.08
         penalties.append(0.08)
 
-        # Identity anomaly
+    # --------------------------------------------------------
+    # Identity Drift (Normalized)
+    # --------------------------------------------------------
     if identity_anomaly > 0:
         delta = 0.09 * identity_anomaly
         confidence += delta
         penalties.append(delta)
 
-# Geometry anomaly
+    # --------------------------------------------------------
+    # Geometry Drift (Normalized)
+    # --------------------------------------------------------
     if geometry_anomaly > 0:
         delta = 0.07 * geometry_anomaly
         confidence += delta
         penalties.append(delta)
 
-
     # --------------------------------------------------------
-    # GAN artifacts (still binary)
+    # GAN artifacts (Binary)
     # --------------------------------------------------------
     if gan_signal and gan_signal.get("verdict") == "gan_artifacts_detected":
         confidence += 0.04
         penalties.append(0.04)
 
     # --------------------------------------------------------
-    # Video-level ML assist
+    # Video-level ML Assist
     # --------------------------------------------------------
     if video_ml_signal and video_ml_signal.get("verdict") in (
         "AI_GENERATED",
@@ -450,7 +450,7 @@ def fuse_video_signals(
         penalties.append(delta)
 
     # --------------------------------------------------------
-    # Evidence soft boost
+    # Evidence Soft Boost
     # --------------------------------------------------------
     confidence = apply_evidence_soft_boost(
         confidence,
@@ -458,7 +458,7 @@ def fuse_video_signals(
     )
 
     # --------------------------------------------------------
-    # Contradiction control
+    # Contradiction Dampening
     # --------------------------------------------------------
     confidence = apply_contradiction_dampening(
         confidence,
@@ -471,7 +471,7 @@ def fuse_video_signals(
     )
 
     # --------------------------------------------------------
-    # Adversarial soft dampening
+    # Adversarial Soft Handling
     # --------------------------------------------------------
     if adversarial_attack and adversarial_attack.get("available", False):
         level = adversarial_attack.get("level", "NONE")
@@ -484,14 +484,14 @@ def fuse_video_signals(
             confidence -= 0.12
 
     # --------------------------------------------------------
-    # Calibration + governor
+    # Calibration + Governor
     # --------------------------------------------------------
     confidence = calibrate_video_confidence(confidence, frames_analyzed)
     confidence = apply_confidence_governor(confidence, frames_analyzed)
     confidence = max(0.0, min(1.0, confidence))
 
     # --------------------------------------------------------
-    # Final verdict
+    # Final Verdict
     # --------------------------------------------------------
     if confidence >= 0.70:
         verdict = "AI_GENERATED"

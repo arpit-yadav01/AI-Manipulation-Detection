@@ -274,7 +274,6 @@
 
 
 
-
 # ============================================================
 # 🔥 ABSOLUTE GPU / EGL HARD DISABLE (MUST BE FIRST)
 # ============================================================
@@ -297,7 +296,7 @@ from app.video.final_fusion import fuse_video_signals
 
 
 # ============================================================
-# HARD SAFETY HELPERS
+# SAFETY HELPERS
 # ============================================================
 
 def ensure_dict(obj, fallback: dict):
@@ -327,12 +326,13 @@ def process_video(job_id: str, video_path: str):
         from app.video.temporal.consistency import compute_temporal_stability
         from app.video.deepfake.motion import analyze_motion_consistency
         from app.video.deepfake.gan_artifacts import detect_gan_artifacts
+        from app.video.deepfake.identity import compute_identity_consistency
+
+        from app.video.geometry.temporal_drift import compute_head_pose_drift
 
         from app.video.human_behavior.blink_detector import analyze_blink_consistency
         from app.video.human_behavior.gaze_dynamics import analyze_gaze_dynamics
         from app.video.human_behavior.micro_expression import analyze_micro_expression_consistency
-
-        from app.video.geometry.temporal_drift import compute_head_pose_drift
 
         from app.video.audio_sync.audio_energy import extract_audio_energy
         from app.video.audio_sync.lip_motion import extract_lip_motion
@@ -355,15 +355,14 @@ def process_video(job_id: str, video_path: str):
         from app.video.timeline.segment_detection import detect_manipulated_segments
         from app.video.timeline.schema import build_video_timeline_schema
 
-        # 🔥 NEW SUMMARIZERS
         from app.video.summarizers.temporal_motion_summary import (
             summarize_temporal,
             summarize_motion,
         )
 
         from app.video.summarizers.identity_geometry_summary import (
-        summarize_identity,
-        summarize_geometry,
+            summarize_identity,
+            summarize_geometry,
         )
 
         # ----------------------------------------------------
@@ -454,36 +453,36 @@ def process_video(job_id: str, video_path: str):
         )
 
         # ----------------------------------------------------
-        # CORE SIGNALS
+        # CORE FORENSIC SIGNALS
         # ----------------------------------------------------
         temporal_signal = safe_signal(compute_temporal_stability(frame_results))
         motion_signal = safe_signal(analyze_motion_consistency([f["path"] for f in frame_results]))
         gan_signal = safe_signal(detect_gan_artifacts([f["path"] for f in frame_results]))
 
-        # 🔥 NORMALIZED ANOMALIES
-        temporal_anomaly = summarize_temporal(temporal_signal)
-        motion_anomaly = summarize_motion(motion_signal)
-
-        identity_anomaly=identity_anomaly,
-        geometry_anomaly=geometry_anomaly,
-
         identity_signal = safe_signal(
-        compute_identity_consistency([f["path"] for f in frame_results])
+            compute_identity_consistency([f["path"] for f in frame_results])
         )
 
         geometry_signal = safe_signal(
-        compute_head_pose_drift(head_poses)
+            compute_head_pose_drift(head_poses)
         )
 
+        # ----------------------------------------------------
+        # NORMALIZED ANOMALIES
+        # ----------------------------------------------------
+        temporal_anomaly = summarize_temporal(temporal_signal)
+        motion_anomaly = summarize_motion(motion_signal)
         identity_anomaly = summarize_identity(identity_signal)
         geometry_anomaly = summarize_geometry(geometry_signal)
 
-
+        # ----------------------------------------------------
+        # VIDEO-LEVEL ML
+        # ----------------------------------------------------
         video_ml_signal = safe_signal(
             classify_video(
                 frame_stats=frame_stats,
                 identity_stats={},
-                geometry_stats={},
+                geometry_stats=geometry_signal,
                 audio_sync_stats=av_sync_signal,
             )
         )
@@ -529,6 +528,8 @@ def process_video(job_id: str, video_path: str):
             motion_signal=motion_signal,
             temporal_anomaly=temporal_anomaly,
             motion_anomaly=motion_anomaly,
+            identity_anomaly=identity_anomaly,
+            geometry_anomaly=geometry_anomaly,
 
             gan_signal=gan_signal,
             video_ml_signal=video_ml_signal,
@@ -544,7 +545,7 @@ def process_video(job_id: str, video_path: str):
         explanations = build_video_explanations(
             temporal_signal=temporal_signal,
             motion_signal=motion_signal,
-            identity_signal=None,
+            identity_signal=identity_signal,
             diffusion_evidence=diffusion_evidence,
             frame_results=frame_results,
             final_confidence=final_verdict.get("confidence"),
