@@ -273,6 +273,8 @@
 
 
 
+
+
 # ============================================================
 # 🔥 ABSOLUTE GPU / EGL HARD DISABLE (MUST BE FIRST)
 # ============================================================
@@ -306,6 +308,7 @@ def safe_signal(signal, verdict="insufficient_data"):
     if isinstance(signal, dict):
         return signal
     return {"verdict": verdict}
+
 
 
 # ============================================================
