@@ -378,6 +378,8 @@ def fuse_video_signals(
     motion_anomaly: float = 0.0,
     identity_anomaly: float = 0.0,
     geometry_anomaly: float = 0.0,
+    av_sync_anomaly: float = 0.0,
+
 ) -> dict:
     """
     Final conservative fusion of all video-level forensic signals.
@@ -430,6 +432,13 @@ def fuse_video_signals(
         delta = 0.07 * geometry_anomaly
         confidence += delta
         penalties.append(delta)
+
+    # AV Sync anomaly (speech-gated)
+    if av_sync_anomaly > 0:
+        delta = 0.08 * av_sync_anomaly
+        confidence += delta
+        penalties.append(delta)
+
 
     # --------------------------------------------------------
     # GAN artifacts (Binary)

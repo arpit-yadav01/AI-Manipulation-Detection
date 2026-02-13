@@ -364,6 +364,7 @@ def process_video(job_id: str, video_path: str):
             summarize_identity,
             summarize_geometry,
         )
+        from app.video.summarizers.av_sync_summary import summarize_av_sync
 
         # ----------------------------------------------------
         # FRAME EXTRACTION
@@ -402,9 +403,16 @@ def process_video(job_id: str, video_path: str):
             )
         )
 
+        
+
         lipsync_dominance = compute_lipsync_dominance(
             speech_signal=speech_signal,
             av_sync_signal=av_sync_signal,
+        )
+
+        av_sync_anomaly = summarize_av_sync(
+        av_sync_signal,
+        speech_signal,
         )
 
         severity_boost = lipsync_dominance.get("severity_boost", 0.0)
@@ -540,6 +548,9 @@ def process_video(job_id: str, video_path: str):
 
             evidence_summary=evidence_summary,
             av_sync_signal=av_sync_signal,
+            av_sync_signal=av_sync_signal,
+            av_sync_anomaly=av_sync_anomaly,
+
         )
 
         explanations = build_video_explanations(

@@ -44,7 +44,8 @@ def compute_lipsync_dominance(
         return {
             "available": True,
             "dominant": True,
-            "severity_boost": 0.25,
+            "severity_boost": 0.12,
+
             "reason": "speech_present_but_lips_desynced",
         }
 
@@ -52,7 +53,8 @@ def compute_lipsync_dominance(
         return {
             "available": True,
             "dominant": True,
-            "severity_boost": 0.15,
+            "severity_boost": 0.07,
+
             "reason": "weak_lip_sync",
         }
 
