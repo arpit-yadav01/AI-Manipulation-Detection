@@ -241,7 +241,6 @@
 
 
 
-
 from app.video.explainability.calibration import calibrate_video_confidence
 
 
@@ -250,10 +249,6 @@ from app.video.explainability.calibration import calibrate_video_confidence
 # ============================================================
 
 def apply_confidence_governor(confidence: float, frames_analyzed: int) -> float:
-    """
-    Caps confidence based on number of analyzed frames
-    to avoid overconfidence on short clips.
-    """
     if frames_analyzed < 5:
         cap = 0.55
     elif frames_analyzed < 15:
@@ -274,10 +269,6 @@ def apply_evidence_soft_boost(
     confidence: float,
     evidence_summary: dict | None,
 ) -> float:
-    """
-    Soft confidence nudge from accumulated evidence.
-    NEVER decides verdict.
-    """
 
     if not isinstance(evidence_summary, dict):
         return confidence
@@ -309,12 +300,6 @@ def apply_contradiction_dampening(
     av_sync_signal: dict | None,
     evidence_summary: dict | None,
 ) -> float:
-    """
-    Dampens confidence when strong natural signals
-    contradict suspicious diffusion evidence.
-
-    Max dampening: -0.12
-    """
 
     if not isinstance(evidence_summary, dict):
         return confidence
@@ -347,7 +332,7 @@ def apply_contradiction_dampening(
 
 
 # ============================================================
-# VIDEO FINAL FUSION — V5 (Section 2 Complete)
+# VIDEO FINAL FUSION — V7 (Reliability + All Safeguards)
 # ============================================================
 
 def fuse_video_signals(
@@ -380,10 +365,14 @@ def fuse_video_signals(
     geometry_anomaly: float = 0.0,
     av_sync_anomaly: float = 0.0,
 
+    # 🔵 RELIABILITY MULTIPLIERS (0–1)
+    temporal_reliability: float = 1.0,
+    motion_reliability: float = 1.0,
+    identity_reliability: float = 1.0,
+    geometry_reliability: float = 1.0,
+    gan_reliability: float = 1.0,
+    av_reliability: float = 1.0,
 ) -> dict:
-    """
-    Final conservative fusion of all video-level forensic signals.
-    """
 
     confidence = float(avg_fake_probability)
     penalties: list[float] = []
@@ -396,59 +385,63 @@ def fuse_video_signals(
         confidence += (ela_suspicious_frames / frames_analyzed) * 0.3
 
     # --------------------------------------------------------
-    # Normalized Temporal
+    # TEMPORAL
     # --------------------------------------------------------
     if temporal_anomaly > 0:
-        delta = 0.10 * temporal_anomaly
+        delta = 0.10 * temporal_anomaly * temporal_reliability
         confidence += delta
         penalties.append(delta)
     elif temporal_signal and temporal_signal.get("verdict") == "unstable":
-        confidence += 0.08
-        penalties.append(0.08)
+        delta = 0.08 * temporal_reliability
+        confidence += delta
+        penalties.append(delta)
 
     # --------------------------------------------------------
-    # Normalized Motion
+    # MOTION
     # --------------------------------------------------------
     if motion_anomaly > 0:
-        delta = 0.08 * motion_anomaly
+        delta = 0.08 * motion_anomaly * motion_reliability
         confidence += delta
         penalties.append(delta)
     elif motion_signal and motion_signal.get("verdict") == "unnatural_motion":
-        confidence += 0.08
-        penalties.append(0.08)
+        delta = 0.08 * motion_reliability
+        confidence += delta
+        penalties.append(delta)
 
     # --------------------------------------------------------
-    # Identity Drift (Normalized)
+    # IDENTITY
     # --------------------------------------------------------
     if identity_anomaly > 0:
-        delta = 0.09 * identity_anomaly
+        delta = 0.09 * identity_anomaly * identity_reliability
         confidence += delta
         penalties.append(delta)
 
     # --------------------------------------------------------
-    # Geometry Drift (Normalized)
+    # GEOMETRY
     # --------------------------------------------------------
     if geometry_anomaly > 0:
-        delta = 0.07 * geometry_anomaly
+        delta = 0.07 * geometry_anomaly * geometry_reliability
         confidence += delta
         penalties.append(delta)
-
-    # AV Sync anomaly (speech-gated)
-    if av_sync_anomaly > 0:
-        delta = 0.08 * av_sync_anomaly
-        confidence += delta
-        penalties.append(delta)
-
 
     # --------------------------------------------------------
-    # GAN artifacts (Binary)
+    # AV SYNC
+    # --------------------------------------------------------
+    if av_sync_anomaly > 0:
+        delta = 0.08 * av_sync_anomaly * av_reliability
+        confidence += delta
+        penalties.append(delta)
+
+    # --------------------------------------------------------
+    # GAN ARTIFACTS
     # --------------------------------------------------------
     if gan_signal and gan_signal.get("verdict") == "gan_artifacts_detected":
-        confidence += 0.04
-        penalties.append(0.04)
+        delta = 0.04 * gan_reliability
+        confidence += delta
+        penalties.append(delta)
 
     # --------------------------------------------------------
-    # Video-level ML Assist
+    # VIDEO-LEVEL ML
     # --------------------------------------------------------
     if video_ml_signal and video_ml_signal.get("verdict") in (
         "AI_GENERATED",
@@ -467,7 +460,7 @@ def fuse_video_signals(
     )
 
     # --------------------------------------------------------
-    # Contradiction Dampening
+    # Contradiction Control
     # --------------------------------------------------------
     confidence = apply_contradiction_dampening(
         confidence,
