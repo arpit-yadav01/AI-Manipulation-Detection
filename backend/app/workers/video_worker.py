@@ -538,6 +538,8 @@ def process_video(job_id: str, video_path: str):
         final_verdict = fuse_video_signals(
             avg_fake_probability=aggregated["avg_fake_probability"],
             frames_analyzed=frames_count,
+            std_ml_fake_prob=frame_stats.get("std_ml_fake_prob", 0.0),
+
 
             temporal_anomaly=temporal_anomaly,
             motion_anomaly=motion_anomaly,
