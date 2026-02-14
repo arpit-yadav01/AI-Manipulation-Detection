@@ -274,7 +274,6 @@
 
 
 
-
 # ============================================================
 # 🔥 ABSOLUTE GPU / EGL HARD DISABLE (MUST BE FIRST)
 # ============================================================
@@ -310,7 +309,6 @@ def safe_signal(signal, verdict="insufficient_data"):
     return {"verdict": verdict}
 
 
-
 # ============================================================
 # MAIN VIDEO PROCESSOR
 # ============================================================
@@ -334,7 +332,6 @@ def process_video(job_id: str, video_path: str):
 
         from app.video.human_behavior.blink_detector import analyze_blink_consistency
         from app.video.human_behavior.gaze_dynamics import analyze_gaze_dynamics
-        from app.video.human_behavior.micro_expression import analyze_micro_expression_consistency
 
         from app.video.audio_sync.audio_energy import extract_audio_energy
         from app.video.audio_sync.lip_motion import extract_lip_motion
@@ -460,7 +457,7 @@ def process_video(job_id: str, video_path: str):
 
         frame_stats = ensure_dict(
             aggregate_video_features(frame_results),
-            {"avg_ml_fake_prob": 0.0, "std_ml_fake_prob": 1.0},
+            {"avg_ml_fake_prob": 0.0},
         )
 
         # ----------------------------------------------------
@@ -485,10 +482,8 @@ def process_video(job_id: str, video_path: str):
         # ----------------------------------------------------
         temporal_reliability = 1.0 if frames_count >= 10 else 0.5
         motion_reliability = 1.0 if frames_count >= 10 else 0.5
-
         identity_reliability = 1.0 if identity_signal.get("mean_similarity") else 0.4
         geometry_reliability = 1.0 if geometry_signal.get("available") else 0.4
-
         gan_reliability = 1.0 if frames_count >= 10 else 0.6
         av_reliability = 1.0 if speech_signal.get("speech_present") else 0.3
 
@@ -506,7 +501,6 @@ def process_video(job_id: str, video_path: str):
 
         blink_signal = safe_signal(analyze_blink_consistency(frame_results))
         gaze_signal = safe_signal(analyze_gaze_dynamics(frame_results))
-        micro_expression_signal = safe_signal(analyze_micro_expression_consistency(frame_results))
 
         # ----------------------------------------------------
         # DIFFUSION EVIDENCE
@@ -533,13 +527,20 @@ def process_video(job_id: str, video_path: str):
         expert_report = generate_diffusion_expert_report(diffusion_evidence)
 
         # ----------------------------------------------------
-        # FINAL FUSION (SECTION 4 ENABLED)
+        # FINAL FUSION (SECTION 7 ENABLED)
         # ----------------------------------------------------
         final_verdict = fuse_video_signals(
             avg_fake_probability=aggregated["avg_fake_probability"],
             frames_analyzed=frames_count,
-            std_ml_fake_prob=frame_stats.get("std_ml_fake_prob", 0.0),
 
+            temporal_signal=temporal_signal,
+            motion_signal=motion_signal,
+            gan_signal=gan_signal,
+            video_ml_signal=video_ml_signal,
+            blink_signal=blink_signal,
+            gaze_signal=gaze_signal,
+            evidence_summary=evidence_summary,
+            av_sync_signal=av_sync_signal,
 
             temporal_anomaly=temporal_anomaly,
             motion_anomaly=motion_anomaly,
@@ -553,18 +554,6 @@ def process_video(job_id: str, video_path: str):
             geometry_reliability=geometry_reliability,
             gan_reliability=gan_reliability,
             av_reliability=av_reliability,
-
-            gan_signal=gan_signal,
-            video_ml_signal=video_ml_signal,
-
-            blink_signal=blink_signal,
-            gaze_signal=gaze_signal,
-            micro_expression_signal=micro_expression_signal,
-
-            evidence_summary=evidence_summary,
-            av_sync_signal=av_sync_signal,
-       
-
         )
 
         explanations = build_video_explanations(
@@ -592,7 +581,6 @@ def process_video(job_id: str, video_path: str):
                         "explanations": explanations,
                         "timeline": timeline,
                         "lipsync_dominance": lipsync_dominance,
-                        
                     },
                 }
             },
