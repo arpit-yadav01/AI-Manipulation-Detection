@@ -293,10 +293,7 @@
 
 
 
-
 from app.video.explainability.calibration import calibrate_video_confidence
-import math
-import statistics
 
 
 # ============================================================
@@ -376,13 +373,15 @@ def apply_contradiction_dampening(
 
 
 # ============================================================
-# SECTION 7 — CROSS SIGNAL AGREEMENT MODEL
+# SECTION 7 — CROSS SIGNAL AGREEMENT
 # ============================================================
 
-def compute_cross_signal_agreement(signal_values: list[float]) -> tuple[float, float]:
+def compute_cross_signal_agreement(signal_values):
 
     if not signal_values:
         return 1.0, 0.0
+
+    import statistics
 
     mean_val = statistics.mean(signal_values)
     variance = statistics.pvariance(signal_values)
@@ -401,13 +400,102 @@ def compute_cross_signal_agreement(signal_values: list[float]) -> tuple[float, f
 
 
 # ============================================================
-# VIDEO FINAL FUSION — V10 (Section 8 Complete)
+# SECTION 8 — STATISTICAL UNCERTAINTY MODELING
+# ============================================================
+
+def compute_confidence_uncertainty(
+    confidence,
+    agreement_score,
+    signal_values,
+    frames_analyzed,
+):
+    import statistics
+
+    base_variance = statistics.pvariance(signal_values) if signal_values else 0.0
+    dispersion = min(1.0, base_variance / 0.25)
+    agreement_uncertainty = 1.0 - agreement_score
+
+    if frames_analyzed < 10:
+        frame_factor = 0.25
+    elif frames_analyzed < 20:
+        frame_factor = 0.15
+    else:
+        frame_factor = 0.08
+
+    uncertainty_margin = (
+        0.4 * dispersion +
+        0.4 * agreement_uncertainty +
+        frame_factor
+    )
+
+    uncertainty_margin = min(0.35, max(0.03, uncertainty_margin))
+
+    lower = max(0.0, confidence - uncertainty_margin)
+    upper = min(1.0, confidence + uncertainty_margin)
+
+    if uncertainty_margin < 0.08:
+        category = "high_certainty"
+    elif uncertainty_margin < 0.18:
+        category = "moderate_certainty"
+    else:
+        category = "low_certainty"
+
+    return {
+        "uncertainty_margin": round(uncertainty_margin, 3),
+        "confidence_interval": [round(lower, 3), round(upper, 3)],
+        "confidence_category": category,
+    }
+
+
+# ============================================================
+# SECTION 9 — SIGNAL DEPENDENCY & CORRELATION MODELING
+# ============================================================
+
+def compute_signal_dependency_adjustment(signal_map):
+    """
+    Penalizes correlated signals firing together.
+    Rewards cross-domain independence.
+    """
+
+    delta = 0.0
+    report = {}
+
+    # GAN ↔ Motion (artifact-motion coupling)
+    if signal_map["gan"] > 0.5 and signal_map["motion"] > 0.5:
+        corr_penalty = -0.04
+        delta += corr_penalty
+        report["gan_motion_correlation"] = corr_penalty
+
+    # Identity ↔ Geometry (facial domain coupling)
+    if signal_map["identity"] > 0.5 and signal_map["geometry"] > 0.5:
+        corr_penalty = -0.03
+        delta += corr_penalty
+        report["identity_geometry_correlation"] = corr_penalty
+
+    # AV Sync ↔ Temporal (time-domain coupling)
+    if signal_map["av_sync"] > 0.5 and signal_map["temporal"] > 0.5:
+        corr_penalty = -0.03
+        delta += corr_penalty
+        report["av_temporal_correlation"] = corr_penalty
+
+    # Reward strong cross-domain independence
+    strong_signals = sum(1 for v in signal_map.values() if v > 0.6)
+    if strong_signals >= 3:
+        independence_bonus = 0.04
+        delta += independence_bonus
+        report["cross_domain_independence_bonus"] = independence_bonus
+
+    return delta, report
+
+
+# ============================================================
+# VIDEO FINAL FUSION — V11
 # ============================================================
 
 def fuse_video_signals(
     *,
-    avg_fake_probability: float,
-    frames_analyzed: int,
+    avg_fake_probability,
+    frames_analyzed,
 
     temporal_signal=None,
     motion_signal=None,
@@ -420,21 +508,19 @@ def fuse_video_signals(
     evidence_summary=None,
     av_sync_signal=None,
 
-    # anomalies
-    temporal_anomaly: float = 0.0,
-    motion_anomaly: float = 0.0,
-    identity_anomaly: float = 0.0,
-    geometry_anomaly: float = 0.0,
-    av_sync_anomaly: float = 0.0,
+    temporal_anomaly=0.0,
+    motion_anomaly=0.0,
+    identity_anomaly=0.0,
+    geometry_anomaly=0.0,
+    av_sync_anomaly=0.0,
 
-    # reliability
-    temporal_reliability: float = 1.0,
-    motion_reliability: float = 1.0,
-    identity_reliability: float = 1.0,
-    geometry_reliability: float = 1.0,
-    gan_reliability: float = 1.0,
-    av_reliability: float = 1.0,
-) -> dict:
+    temporal_reliability=1.0,
+    motion_reliability=1.0,
+    identity_reliability=1.0,
+    geometry_reliability=1.0,
+    gan_reliability=1.0,
+    av_reliability=1.0,
+):
 
     confidence = float(avg_fake_probability)
     penalties = []
@@ -448,49 +534,35 @@ def fuse_video_signals(
             "effective_impact": round(delta, 4),
         }
 
-    # =========================
-    # TEMPORAL
-    # =========================
+    # ========================================================
+    # RELIABILITY-WEIGHTED SIGNALS
+    # ========================================================
+
     delta = 0.10 * temporal_anomaly * temporal_reliability
     confidence += delta
     penalties.append(delta)
     record("temporal", temporal_anomaly, temporal_reliability, 0.10, delta)
 
-    # =========================
-    # MOTION
-    # =========================
     delta = 0.08 * motion_anomaly * motion_reliability
     confidence += delta
     penalties.append(delta)
     record("motion", motion_anomaly, motion_reliability, 0.08, delta)
 
-    # =========================
-    # IDENTITY
-    # =========================
     delta = 0.09 * identity_anomaly * identity_reliability
     confidence += delta
     penalties.append(delta)
     record("identity", identity_anomaly, identity_reliability, 0.09, delta)
 
-    # =========================
-    # GEOMETRY
-    # =========================
     delta = 0.07 * geometry_anomaly * geometry_reliability
     confidence += delta
     penalties.append(delta)
     record("geometry", geometry_anomaly, geometry_reliability, 0.07, delta)
 
-    # =========================
-    # AV SYNC
-    # =========================
     delta = 0.08 * av_sync_anomaly * av_reliability
     confidence += delta
     penalties.append(delta)
     record("av_sync", av_sync_anomaly, av_reliability, 0.08, delta)
 
-    # =========================
-    # GAN
-    # =========================
     gan_delta = 0.0
     if gan_signal and gan_signal.get("verdict") == "gan_artifacts_detected":
         gan_delta = 0.04 * gan_reliability
@@ -499,19 +571,8 @@ def fuse_video_signals(
 
     record("gan", 1.0 if gan_delta > 0 else 0.0, gan_reliability, 0.04, gan_delta)
 
-    # =========================
-    # VIDEO ML
-    # =========================
-    ml_delta = 0.0
-    if video_ml_signal and video_ml_signal.get("verdict") in ("AI_GENERATED", "LIKELY_AI"):
-        ml_delta = min(0.15, float(video_ml_signal.get("confidence", 0.0)) * 0.2)
-        confidence += ml_delta
-        penalties.append(ml_delta)
-
-    record("video_ml", 1.0 if ml_delta > 0 else 0.0, 1.0, 0.15, ml_delta)
-
     # ========================================================
-    # SECTION 7 — CROSS SIGNAL AGREEMENT
+    # SECTION 7 — AGREEMENT
     # ========================================================
 
     signal_values = [
@@ -532,7 +593,28 @@ def fuse_video_signals(
     }
 
     # ========================================================
-    # Evidence + Contradiction + Adversarial
+    # SECTION 9 — DEPENDENCY CORRECTION
+    # ========================================================
+
+    signal_map = {
+        "temporal": temporal_anomaly,
+        "motion": motion_anomaly,
+        "identity": identity_anomaly,
+        "geometry": geometry_anomaly,
+        "av_sync": av_sync_anomaly,
+        "gan": 1.0 if gan_delta > 0 else 0.0,
+    }
+
+    dependency_delta, dependency_report = compute_signal_dependency_adjustment(signal_map)
+    confidence += dependency_delta
+
+    signal_breakdown["signal_dependency"] = {
+        "dependency_adjustment": round(dependency_delta, 3),
+        "details": dependency_report,
+    }
+
+    # ========================================================
+    # EVIDENCE + CONTRADICTION + ADVERSARIAL
     # ========================================================
 
     confidence = apply_evidence_soft_boost(confidence, evidence_summary)
@@ -557,7 +639,7 @@ def fuse_video_signals(
             confidence -= 0.12
 
     # ========================================================
-    # Calibration + Governor
+    # CALIBRATION + GOVERNOR
     # ========================================================
 
     confidence = calibrate_video_confidence(confidence, frames_analyzed)
@@ -565,35 +647,18 @@ def fuse_video_signals(
     confidence = max(0.0, min(1.0, confidence))
 
     # ========================================================
-    # SECTION 8 — STATISTICAL CONFIDENCE MODELING
+    # SECTION 8 — UNCERTAINTY
     # ========================================================
 
-    disagreement = 1.0 - agreement_score
-
-    sample_factor = 1.0 / math.sqrt(frames_analyzed) if frames_analyzed > 0 else 1.0
-    evidence_strength = abs(sum(penalties))
-    evidence_factor = 1.0 - min(1.0, evidence_strength)
-
-    base_uncertainty = (
-        0.5 * disagreement +
-        0.3 * sample_factor +
-        0.2 * evidence_factor
+    uncertainty_data = compute_confidence_uncertainty(
+        confidence,
+        agreement_score,
+        signal_values,
+        frames_analyzed,
     )
 
-    uncertainty_margin = min(0.35, max(0.02, base_uncertainty * 0.4))
-
-    lower_bound = max(0.0, confidence - uncertainty_margin)
-    upper_bound = min(1.0, confidence + uncertainty_margin)
-
-    if uncertainty_margin < 0.07:
-        confidence_category = "high_certainty"
-    elif uncertainty_margin < 0.15:
-        confidence_category = "moderate_certainty"
-    else:
-        confidence_category = "low_certainty"
-
     # ========================================================
-    # Final Verdict
+    # VERDICT
     # ========================================================
 
     if confidence >= 0.70:
@@ -607,13 +672,8 @@ def fuse_video_signals(
         "verdict": verdict,
         "confidence": round(confidence, 2),
         "raw_confidence": round(confidence, 3),
-        "uncertainty_margin": round(uncertainty_margin, 3),
-        "confidence_interval": [
-            round(lower_bound, 3),
-            round(upper_bound, 3),
-        ],
-        "confidence_category": confidence_category,
         "frames_analyzed": frames_analyzed,
         "penalties_applied": round(sum(penalties), 3),
         "signal_breakdown": signal_breakdown,
+        **uncertainty_data,
     }
