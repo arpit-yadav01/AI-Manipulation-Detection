@@ -1,5 +1,9 @@
-from app.core.db import get_database
+from app.core.db import mongo
 from pymongo import ReturnDocument
+
+# ============================================================
+# DEFAULT CONFIG
+# ============================================================
 
 DEFAULT_WEIGHTS = {
     "temporal": 0.10,
@@ -16,55 +20,74 @@ MIN_WEIGHT = 0.02
 MAX_WEIGHT = 0.25
 
 
+# ============================================================
+# GET REGISTRY
+# ============================================================
+
 def get_weight_registry():
-    db = get_database()
-    registry = db.results.find_one({"type": "weight_registry"})
+    """
+    Fetch adaptive weights from Mongo.
+    If not present, initialize default registry.
+    """
+
+    registry = mongo.results.find_one({"type": "weight_registry"})
 
     if not registry:
         registry = {
             "type": "weight_registry",
             "version": "v1",
-            "weights": DEFAULT_WEIGHTS,
+            "weights": DEFAULT_WEIGHTS.copy(),
         }
-        db.results.insert_one(registry)
+        mongo.results.insert_one(registry)
 
     return registry["weights"]
 
 
+# ============================================================
+# UPDATE FROM SUPERVISED FEEDBACK
+# ============================================================
+
 def update_weights_from_feedback(job_result: dict, ground_truth: str):
     """
-    Update weights based on supervised ground truth.
+    Update weights using supervised ground truth.
+    Only updates signals that have anomaly scores.
     """
 
-    db = get_database()
-    registry = db.results.find_one({"type": "weight_registry"})
+    registry = mongo.results.find_one({"type": "weight_registry"})
 
     if not registry:
-        return
+        return DEFAULT_WEIGHTS
 
     weights = registry["weights"]
 
     predicted = job_result["final_verdict"]["verdict"]
     signal_breakdown = job_result["final_verdict"]["signal_breakdown"]
 
-    # Determine if prediction was correct
+    # Was prediction correct?
     correct = predicted == ground_truth
 
     for signal_name, details in signal_breakdown.items():
-        if signal_name in weights and isinstance(details, dict):
-            anomaly = details.get("anomaly", 0)
-            impact = details.get("effective_impact", 0)
 
-            # signal alignment score
-            alignment = anomaly if correct else -anomaly
+        if signal_name not in weights:
+            continue
 
-            updated_weight = weights[signal_name] + LEARNING_RATE * alignment
+        if not isinstance(details, dict):
+            continue
 
-            # clamp
-            updated_weight = max(MIN_WEIGHT, min(MAX_WEIGHT, updated_weight))
-            weights[signal_name] = round(updated_weight, 4)
+        anomaly = details.get("anomaly", 0.0)
 
-    db.results.find_one_and_update(
+        # If prediction correct → reward signal
+        # If incorrect → penalize signal
+        alignment = anomaly if correct else -anomaly
+
+        updated_weight = weights[signal_name] + LEARNING_RATE * alignment
+
+        # Clamp for safety
+        updated_weight = max(MIN_WEIGHT, min(MAX_WEIGHT, updated_weight))
+
+        weights[signal_name] = round(updated_weight, 4)
+
+    mongo.results.find_one_and_update(
         {"type": "weight_registry"},
         {"$set": {"weights": weights}},
         return_document=ReturnDocument.AFTER,
