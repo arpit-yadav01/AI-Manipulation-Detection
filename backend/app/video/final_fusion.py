@@ -292,8 +292,8 @@
 #     }
 
 
-
 from app.video.explainability.calibration import calibrate_video_confidence
+from app.video.weight_learning import get_weight_registry
 
 
 # ============================================================
@@ -400,7 +400,7 @@ def compute_cross_signal_agreement(signal_values):
 
 
 # ============================================================
-# SECTION 8 — STATISTICAL UNCERTAINTY MODELING
+# SECTION 8 — STATISTICAL UNCERTAINTY
 # ============================================================
 
 def compute_confidence_uncertainty(
@@ -448,37 +448,29 @@ def compute_confidence_uncertainty(
 
 
 # ============================================================
-# SECTION 9 — SIGNAL DEPENDENCY & CORRELATION MODELING
+# SECTION 9 — DEPENDENCY MODELING
 # ============================================================
 
 def compute_signal_dependency_adjustment(signal_map):
-    """
-    Penalizes correlated signals firing together.
-    Rewards cross-domain independence.
-    """
 
     delta = 0.0
     report = {}
 
-    # GAN ↔ Motion (artifact-motion coupling)
     if signal_map["gan"] > 0.5 and signal_map["motion"] > 0.5:
         corr_penalty = -0.04
         delta += corr_penalty
         report["gan_motion_correlation"] = corr_penalty
 
-    # Identity ↔ Geometry (facial domain coupling)
     if signal_map["identity"] > 0.5 and signal_map["geometry"] > 0.5:
         corr_penalty = -0.03
         delta += corr_penalty
         report["identity_geometry_correlation"] = corr_penalty
 
-    # AV Sync ↔ Temporal (time-domain coupling)
     if signal_map["av_sync"] > 0.5 and signal_map["temporal"] > 0.5:
         corr_penalty = -0.03
         delta += corr_penalty
         report["av_temporal_correlation"] = corr_penalty
 
-    # Reward strong cross-domain independence
     strong_signals = sum(1 for v in signal_map.values() if v > 0.6)
     if strong_signals >= 3:
         independence_bonus = 0.04
@@ -489,7 +481,7 @@ def compute_signal_dependency_adjustment(signal_map):
 
 
 # ============================================================
-# VIDEO FINAL FUSION — V11
+# VIDEO FINAL FUSION (DYNAMIC WEIGHTS ENABLED)
 # ============================================================
 
 def fuse_video_signals(
@@ -523,6 +515,8 @@ def fuse_video_signals(
 ):
 
     confidence = float(avg_fake_probability)
+    weights = get_weight_registry()
+
     penalties = []
     signal_breakdown = {}
 
@@ -530,50 +524,57 @@ def fuse_video_signals(
         signal_breakdown[name] = {
             "anomaly": round(anomaly, 3),
             "reliability": round(reliability, 3),
-            "weight": weight,
+            "weight": round(weight, 4),
             "effective_impact": round(delta, 4),
         }
 
-    # ========================================================
-    # RELIABILITY-WEIGHTED SIGNALS
-    # ========================================================
+    # === Dynamic Weight Signals ===
 
-    delta = 0.10 * temporal_anomaly * temporal_reliability
+    delta = weights["temporal"] * temporal_anomaly * temporal_reliability
     confidence += delta
     penalties.append(delta)
-    record("temporal", temporal_anomaly, temporal_reliability, 0.10, delta)
+    record("temporal", temporal_anomaly, temporal_reliability, weights["temporal"], delta)
 
-    delta = 0.08 * motion_anomaly * motion_reliability
+    delta = weights["motion"] * motion_anomaly * motion_reliability
     confidence += delta
     penalties.append(delta)
-    record("motion", motion_anomaly, motion_reliability, 0.08, delta)
+    record("motion", motion_anomaly, motion_reliability, weights["motion"], delta)
 
-    delta = 0.09 * identity_anomaly * identity_reliability
+    delta = weights["identity"] * identity_anomaly * identity_reliability
     confidence += delta
     penalties.append(delta)
-    record("identity", identity_anomaly, identity_reliability, 0.09, delta)
+    record("identity", identity_anomaly, identity_reliability, weights["identity"], delta)
 
-    delta = 0.07 * geometry_anomaly * geometry_reliability
+    delta = weights["geometry"] * geometry_anomaly * geometry_reliability
     confidence += delta
     penalties.append(delta)
-    record("geometry", geometry_anomaly, geometry_reliability, 0.07, delta)
+    record("geometry", geometry_anomaly, geometry_reliability, weights["geometry"], delta)
 
-    delta = 0.08 * av_sync_anomaly * av_reliability
+    delta = weights["av_sync"] * av_sync_anomaly * av_reliability
     confidence += delta
     penalties.append(delta)
-    record("av_sync", av_sync_anomaly, av_reliability, 0.08, delta)
+    record("av_sync", av_sync_anomaly, av_reliability, weights["av_sync"], delta)
 
     gan_delta = 0.0
     if gan_signal and gan_signal.get("verdict") == "gan_artifacts_detected":
-        gan_delta = 0.04 * gan_reliability
+        gan_delta = weights["gan"] * gan_reliability
         confidence += gan_delta
         penalties.append(gan_delta)
 
-    record("gan", 1.0 if gan_delta > 0 else 0.0, gan_reliability, 0.04, gan_delta)
+    record("gan", 1.0 if gan_delta > 0 else 0.0, gan_reliability, weights["gan"], gan_delta)
 
-    # ========================================================
-    # SECTION 7 — AGREEMENT
-    # ========================================================
+    ml_delta = 0.0
+    if video_ml_signal and video_ml_signal.get("verdict") in ("AI_GENERATED", "LIKELY_AI"):
+        ml_delta = min(
+            weights["video_ml"],
+            float(video_ml_signal.get("confidence", 0.0)) * 0.2
+        )
+        confidence += ml_delta
+        penalties.append(ml_delta)
+
+    record("video_ml", 1.0 if ml_delta > 0 else 0.0, 1.0, weights["video_ml"], ml_delta)
+
+    # === Agreement ===
 
     signal_values = [
         temporal_anomaly,
@@ -592,9 +593,7 @@ def fuse_video_signals(
         "confidence_adjustment": agreement_delta,
     }
 
-    # ========================================================
-    # SECTION 9 — DEPENDENCY CORRECTION
-    # ========================================================
+    # === Dependency ===
 
     signal_map = {
         "temporal": temporal_anomaly,
@@ -613,9 +612,7 @@ def fuse_video_signals(
         "details": dependency_report,
     }
 
-    # ========================================================
-    # EVIDENCE + CONTRADICTION + ADVERSARIAL
-    # ========================================================
+    # === Post Processing ===
 
     confidence = apply_evidence_soft_boost(confidence, evidence_summary)
 
@@ -638,17 +635,11 @@ def fuse_video_signals(
         elif level == "HIGH":
             confidence -= 0.12
 
-    # ========================================================
-    # CALIBRATION + GOVERNOR
-    # ========================================================
-
     confidence = calibrate_video_confidence(confidence, frames_analyzed)
     confidence = apply_confidence_governor(confidence, frames_analyzed)
     confidence = max(0.0, min(1.0, confidence))
 
-    # ========================================================
-    # SECTION 8 — UNCERTAINTY
-    # ========================================================
+    # === Uncertainty ===
 
     uncertainty_data = compute_confidence_uncertainty(
         confidence,
@@ -657,9 +648,7 @@ def fuse_video_signals(
         frames_analyzed,
     )
 
-    # ========================================================
-    # VERDICT
-    # ========================================================
+    # === Verdict ===
 
     if confidence >= 0.70:
         verdict = "AI_GENERATED"
