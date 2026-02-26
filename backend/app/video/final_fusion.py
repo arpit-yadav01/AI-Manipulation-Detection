@@ -375,60 +375,36 @@
 #     }
 
 
-
 from app.video.explainability.calibration import calibrate_video_confidence
 from app.video.weight_learning import get_weight_registry
-import math
+import statistics
 
 
 # ============================================================
-# SECTION 11 — BAYESIAN CONFIG
+# BASE PRIOR
 # ============================================================
 
 BASE_PRIOR = 0.35
-LR_SCALE = 2.2
-MAX_LR = 6.0  # overflow safety
+LR_SCALE = 2.0
 
 
 # ============================================================
-# CONFIDENCE GOVERNOR (Retained)
+# LIKELIHOOD RATIO
 # ============================================================
 
-def apply_confidence_governor(confidence: float, frames_analyzed: int) -> float:
-    if frames_analyzed < 5:
-        cap = 0.55
-    elif frames_analyzed < 15:
-        cap = 0.75
-    elif frames_analyzed < 30:
-        cap = 0.90
-    else:
-        return confidence
-    return min(confidence, cap)
-
-
-# ============================================================
-# SECTION 11 — LIKELIHOOD RATIO CORE
-# ============================================================
-
-def compute_likelihood_ratio(weight, anomaly, reliability, frames_analyzed):
-
-    # Section 12 — adaptive scaling
-    frame_factor = min(1.2, max(0.7, frames_analyzed / 30))
-
+def compute_likelihood_ratio(weight, anomaly, reliability):
     strength = weight * anomaly * reliability
-    lr = 1.0 + (strength * LR_SCALE * frame_factor)
-
-    return min(lr, MAX_LR)
+    return 1.0 + (strength * LR_SCALE)
 
 
-def compute_bayesian_posterior(likelihood_ratios, prior):
+# ============================================================
+# POSTERIOR
+# ============================================================
 
-    # log-domain multiplication (Section 12 stability)
-    log_sum = 0.0
-    for lr in likelihood_ratios:
-        log_sum += math.log(max(lr, 1e-6))
-
-    combined_lr = math.exp(log_sum)
+def compute_posterior(lr_list, prior):
+    combined_lr = 1.0
+    for lr in lr_list:
+        combined_lr *= lr
 
     numerator = prior * combined_lr
     denominator = numerator + (1 - prior)
@@ -440,49 +416,35 @@ def compute_bayesian_posterior(likelihood_ratios, prior):
 
 
 # ============================================================
-# SECTION 9 — DEPENDENCY MODELING (Retained)
+# SECTION 7 — CROSS SIGNAL AGREEMENT
 # ============================================================
 
-def compute_signal_dependency_adjustment(signal_map):
+def compute_cross_signal_agreement(signal_values):
+    if not signal_values:
+        return 1.0, 0.0
 
-    delta_prior = 0.0
-    report = {}
+    variance = statistics.pvariance(signal_values)
+    normalized_variance = min(1.0, variance / 0.25)
+    agreement_score = 1.0 - normalized_variance
 
-    if signal_map["gan"] > 0.5 and signal_map["motion"] > 0.5:
-        delta_prior -= 0.05
-        report["gan_motion_overlap"] = -0.05
+    if agreement_score > 0.75:
+        delta = 0.05
+    elif agreement_score < 0.35:
+        delta = -0.06
+    else:
+        delta = 0.0
 
-    if signal_map["identity"] > 0.5 and signal_map["geometry"] > 0.5:
-        delta_prior -= 0.04
-        report["identity_geometry_overlap"] = -0.04
-
-    if signal_map["av_sync"] > 0.5 and signal_map["temporal"] > 0.5:
-        delta_prior -= 0.04
-        report["av_temporal_overlap"] = -0.04
-
-    strong = sum(1 for v in signal_map.values() if v > 0.6)
-    if strong >= 3:
-        delta_prior += 0.05
-        report["cross_domain_independence_bonus"] = 0.05
-
-    return delta_prior, report
+    return round(agreement_score, 3), delta
 
 
 # ============================================================
-# SECTION 8 — UNCERTAINTY (Retained)
+# SECTION 8 — UNCERTAINTY
 # ============================================================
 
-def compute_confidence_uncertainty(
-    confidence,
-    agreement_score,
-    signal_values,
-    frames_analyzed,
-):
-    import statistics
+def compute_uncertainty(signal_values, frames_analyzed, confidence):
 
-    base_variance = statistics.pvariance(signal_values) if signal_values else 0.0
-    dispersion = min(1.0, base_variance / 0.25)
-    agreement_uncertainty = 1.0 - agreement_score
+    variance = statistics.pvariance(signal_values) if signal_values else 0.0
+    dispersion = min(1.0, variance / 0.25)
 
     if frames_analyzed < 10:
         frame_factor = 0.25
@@ -491,20 +453,14 @@ def compute_confidence_uncertainty(
     else:
         frame_factor = 0.08
 
-    uncertainty_margin = (
-        0.4 * dispersion +
-        0.4 * agreement_uncertainty +
-        frame_factor
-    )
-
-    uncertainty_margin = min(0.35, max(0.03, uncertainty_margin))
+    uncertainty_margin = min(0.35, max(0.05, 0.5 * dispersion + frame_factor))
 
     lower = max(0.0, confidence - uncertainty_margin)
     upper = min(1.0, confidence + uncertainty_margin)
 
-    if uncertainty_margin < 0.08:
+    if uncertainty_margin < 0.1:
         category = "high_certainty"
-    elif uncertainty_margin < 0.18:
+    elif uncertainty_margin < 0.2:
         category = "moderate_certainty"
     else:
         category = "low_certainty"
@@ -517,44 +473,46 @@ def compute_confidence_uncertainty(
 
 
 # ============================================================
-# SECTION 7 — AGREEMENT (Retained for uncertainty only)
+# SECTION 9 + 11 — DEPENDENCY MODEL
 # ============================================================
 
-def compute_cross_signal_agreement(signal_values):
+def compute_signal_dependency_adjustment(signal_map):
 
-    if not signal_values:
-        return 1.0, 0.0
+    delta = 0.0
+    report = {}
 
-    import statistics
+    if signal_map["gan"] > 0.5 and signal_map["motion"] > 0.5:
+        penalty = -0.04
+        delta += penalty
+        report["gan_motion_correlation"] = penalty
 
-    mean_val = statistics.mean(signal_values)
-    variance = statistics.pvariance(signal_values)
+    if signal_map["identity"] > 0.5 and signal_map["geometry"] > 0.5:
+        penalty = -0.03
+        delta += penalty
+        report["identity_geometry_correlation"] = penalty
 
-    normalized_variance = min(1.0, variance / 0.25)
-    agreement_score = 1.0 - normalized_variance
+    if signal_map["av_sync"] > 0.5 and signal_map["temporal"] > 0.5:
+        penalty = -0.03
+        delta += penalty
+        report["av_temporal_correlation"] = penalty
 
-    return round(agreement_score, 3), 0.0
+    strong_signals = sum(1 for v in signal_map.values() if v > 0.6)
+    if strong_signals >= 3:
+        bonus = 0.04
+        delta += bonus
+        report["cross_domain_independence_bonus"] = bonus
+
+    return delta, report
 
 
 # ============================================================
-# FINAL FUSION — V14 (Bayesian + Performance)
+# MAIN FUSION — V15 (Sections 7–12 Complete)
 # ============================================================
 
 def fuse_video_signals(
     *,
     avg_fake_probability,
     frames_analyzed,
-
-    temporal_signal=None,
-    motion_signal=None,
-    gan_signal=None,
-    video_ml_signal=None,
-
-    blink_signal=None,
-    gaze_signal=None,
-    adversarial_attack=None,
-    evidence_summary=None,
-    av_sync_signal=None,
 
     temporal_anomaly=0.0,
     motion_anomaly=0.0,
@@ -568,9 +526,90 @@ def fuse_video_signals(
     geometry_reliability=1.0,
     gan_reliability=1.0,
     av_reliability=1.0,
+
+    gan_signal=None,
+    evidence_summary=None,
 ):
 
     weights = get_weight_registry()
+
+    # ========================================================
+    # DOMAIN 1 — VISUAL ARTIFACTS
+    # ========================================================
+
+    gan_anomaly = 1.0 if gan_signal and gan_signal.get("verdict") == "gan_artifacts_detected" else 0.0
+
+    visual_lrs = [
+        compute_likelihood_ratio(weights["gan"], gan_anomaly, gan_reliability),
+        compute_likelihood_ratio(weights["motion"], motion_anomaly, motion_reliability),
+    ]
+
+    visual_posterior = compute_posterior(visual_lrs, 0.5)
+
+    # ========================================================
+    # DOMAIN 2 — FACE DOMAIN
+    # ========================================================
+
+    face_lrs = [
+        compute_likelihood_ratio(weights["identity"], identity_anomaly, identity_reliability),
+        compute_likelihood_ratio(weights["geometry"], geometry_anomaly, geometry_reliability),
+    ]
+
+    face_posterior = compute_posterior(face_lrs, 0.5)
+
+    # ========================================================
+    # DOMAIN 3 — TEMPORAL
+    # ========================================================
+
+    temporal_lrs = [
+        compute_likelihood_ratio(weights["temporal"], temporal_anomaly, temporal_reliability),
+        compute_likelihood_ratio(weights["motion"], motion_anomaly, motion_reliability),
+    ]
+
+    temporal_posterior = compute_posterior(temporal_lrs, 0.5)
+
+    # ========================================================
+    # DOMAIN 4 — AUDIO VISUAL
+    # ========================================================
+
+    av_lrs = [
+        compute_likelihood_ratio(weights["av_sync"], av_sync_anomaly, av_reliability),
+    ]
+
+    av_posterior = compute_posterior(av_lrs, 0.5)
+
+    # ========================================================
+    # GLOBAL POSTERIOR
+    # ========================================================
+
+    domain_lrs = [
+        1 + (visual_posterior - 0.5),
+        1 + (face_posterior - 0.5),
+        1 + (temporal_posterior - 0.5),
+        1 + (av_posterior - 0.5),
+    ]
+
+    confidence = compute_posterior(domain_lrs, BASE_PRIOR)
+
+    # ========================================================
+    # CROSS SIGNAL AGREEMENT
+    # ========================================================
+
+    signal_values = [
+        temporal_anomaly,
+        motion_anomaly,
+        identity_anomaly,
+        geometry_anomaly,
+        av_sync_anomaly,
+        gan_anomaly,
+    ]
+
+    agreement_score, agreement_delta = compute_cross_signal_agreement(signal_values)
+    confidence += agreement_delta
+
+    # ========================================================
+    # DEPENDENCY MODEL
+    # ========================================================
 
     signal_map = {
         "temporal": temporal_anomaly,
@@ -578,75 +617,49 @@ def fuse_video_signals(
         "identity": identity_anomaly,
         "geometry": geometry_anomaly,
         "av_sync": av_sync_anomaly,
-        "gan": 1.0 if gan_signal and gan_signal.get("verdict") == "gan_artifacts_detected" else 0.0,
+        "gan": gan_anomaly,
     }
 
-    likelihoods = []
-    signal_breakdown = {}
+    dependency_delta, dependency_report = compute_signal_dependency_adjustment(signal_map)
+    confidence += dependency_delta
 
-    def process_signal(name, anomaly, reliability):
+    # ========================================================
+    # CALIBRATION
+    # ========================================================
 
-        weight = weights.get(name, 0.05)
+    confidence = calibrate_video_confidence(confidence, frames_analyzed)
+    confidence = max(0.0, min(1.0, confidence))
 
-        lr = compute_likelihood_ratio(
-            weight,
-            anomaly,
-            reliability,
-            frames_analyzed,
-        )
+    # ========================================================
+    # UNCERTAINTY
+    # ========================================================
 
-        likelihoods.append(lr)
+    uncertainty_data = compute_uncertainty(signal_values, frames_analyzed, confidence)
 
-        signal_breakdown[name] = {
-            "anomaly": round(anomaly, 3),
-            "reliability": round(reliability, 3),
-            "weight": round(weight, 4),
-            "likelihood_ratio": round(lr, 3),
-        }
+    # ========================================================
+    # VERDICT
+    # ========================================================
 
-    process_signal("temporal", temporal_anomaly, temporal_reliability)
-    process_signal("motion", motion_anomaly, motion_reliability)
-    process_signal("identity", identity_anomaly, identity_reliability)
-    process_signal("geometry", geometry_anomaly, geometry_reliability)
-    process_signal("av_sync", av_sync_anomaly, av_reliability)
-    process_signal("gan", signal_map["gan"], gan_reliability)
-
-    # Dependency modifies prior
-    prior = BASE_PRIOR
-    prior_delta, dependency_report = compute_signal_dependency_adjustment(signal_map)
-    prior = max(0.05, min(0.95, prior + prior_delta))
-
-    signal_breakdown["signal_dependency"] = dependency_report
-
-    posterior = compute_bayesian_posterior(likelihoods, prior)
-
-    posterior = calibrate_video_confidence(posterior, frames_analyzed)
-    posterior = apply_confidence_governor(posterior, frames_analyzed)
-    posterior = max(0.0, min(1.0, posterior))
-
-    agreement_score, _ = compute_cross_signal_agreement(
-        list(signal_map.values())
-    )
-
-    uncertainty_data = compute_confidence_uncertainty(
-        posterior,
-        agreement_score,
-        list(signal_map.values()),
-        frames_analyzed,
-    )
-
-    if posterior >= 0.75:
+    if confidence >= 0.75:
         verdict = "AI_GENERATED"
-    elif posterior >= 0.40:
+    elif confidence >= 0.40:
         verdict = "INCONCLUSIVE"
     else:
         verdict = "LIKELY_REAL"
 
     return {
         "verdict": verdict,
-        "confidence": round(posterior, 2),
-        "raw_confidence": round(posterior, 3),
+        "confidence": round(confidence, 2),
+        "raw_confidence": round(confidence, 3),
         "frames_analyzed": frames_analyzed,
-        "signal_breakdown": signal_breakdown,
+        "domain_posteriors": {
+            "visual_artifacts": round(visual_posterior, 3),
+            "identity_geometry": round(face_posterior, 3),
+            "temporal": round(temporal_posterior, 3),
+            "audio_visual": round(av_posterior, 3),
+        },
+        "agreement_score": agreement_score,
+        "dependency_adjustment": round(dependency_delta, 3),
+        "dependency_details": dependency_report,
         **uncertainty_data,
     }
