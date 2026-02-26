@@ -92,5 +92,6 @@ def update_weights_from_feedback(job_result: dict, ground_truth: str):
         {"$set": {"weights": weights}},
         return_document=ReturnDocument.AFTER,
     )
+    
 
     return weights
